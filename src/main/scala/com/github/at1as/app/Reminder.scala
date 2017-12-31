@@ -2,11 +2,16 @@ package com.github.at1as.app
 
 import java.text.SimpleDateFormat
 import java.util.{Calendar, Locale}
-
+import org.json4s.{DefaultFormats, Formats}
 import org.scalatra._
+import org.scalatra.json._
 import com.github.at1as.app.TwilioClient.{initializeTwilio, sendMessage}
+import com.github.at1as.app.MessageCallback
 
-class Reminder extends ScalatraServlet with MethodOverride {
+class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSupport {
+
+  protected implicit lazy val jsonFormats: Formats = DefaultFormats
+
 
   get("/") {
     views.html.hello()
@@ -57,11 +62,11 @@ class Reminder extends ScalatraServlet with MethodOverride {
       "sunday"
     )
 
-    val from   = params("from")
-    val action = params("body").split(" ").head.toLowerCase
-    val text   = params("body").split(" ").tail.mkString(" ")
+    val from   = params("From")
+    val action = params("Body").split(" ").head.toLowerCase
+    val text   = params("Body").split(" ").tail.mkString(" ")
 
-    if (action contains ("unsubscribe", "cancel", "stop")) {
+    if (Array("unsubscribe", "cancel", "stop", "completed") contains action) {
 
       // If no reminder ID is passed, delete all reminders for the incoming number
       var deletedNum: Int = 0
@@ -76,7 +81,7 @@ class Reminder extends ScalatraServlet with MethodOverride {
       sendMessage(from, s"Removed $deletedNum reminders")
 
       //} else if (action contains ("daily", "weekly", "weekdays", "weekends", DAYS : _*)) {
-    } else if (action contains Array("daily", "weekly", "weekdays", "weekends", DAYS).flatMap { case s: String => Array(s); case as: Array[String] => as }) {
+    } else if (Array("daily", "weekly", "weekdays", "weekends", DAYS).flatMap { case s: String => Array(s); case as: Array[String] => as } contains action) {
 
       var schedule: Array[String] = Array()
 
@@ -93,14 +98,16 @@ class Reminder extends ScalatraServlet with MethodOverride {
           schedule = Array(action)
       }
 
-      Spreadsheet.addEntry(
+      println(schedule)
+
+      val entryId = Spreadsheet.addEntry(
         from,
         text,
         schedule
       )
 
       initializeTwilio()
-      sendMessage(from, s"You are now subscribed on $action schedule to receive reminders for: $text")
+      sendMessage(from, s"You are now subscribed on $action schedule to receive reminders for: $text (id: $entryId)")
     }
   }
 
@@ -109,16 +116,20 @@ class Reminder extends ScalatraServlet with MethodOverride {
 
     // send all scheduled messages
     val dateFormat = new SimpleDateFormat("d-M-y")
-    val today = dateFormat.format(Calendar.getInstance().getTime)
-    val jobIds: Array[Int] = Array()
+    val today      = dateFormat.format(Calendar.getInstance().getTime)
+    val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
+
+    var jobIds: Array[Int] = Array()
 
     // Find messages scheduled to send on the current day
-    val messages = Spreadsheet.findEntryBySchedule(today)
+    val messages = Spreadsheet.findEntryBySchedule(dayOfWeek)
+    println(f"Batching ${messages.size} reminders to send")
+
     messages.foreach(fields => {
       sendMessage(
         fields("TO_NUMBER"), fields("MSG_BODY")
       )
-      jobIds :+ fields("ID")
+      jobIds :+= fields("ID").toInt
     })
 
     // Update "LAST_SENT" field on the job
