@@ -74,7 +74,7 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
       if (text == "") {
         deletedNum = Spreadsheet.removeAccountEntries(from)
       } else {
-        deletedNum = Spreadsheet.remoteEntry(text.toInt)
+        deletedNum = Spreadsheet.remoteEntry(from, text.toInt)
       }
 
       initializeTwilio()
