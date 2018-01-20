@@ -53,7 +53,7 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
     // Twilio only offers oine single web-hook for incoming numbers which must
     // be either GET or POSTso all app logic will be behind this endpoint
     new AsyncResult { val is: Unit = {
-      val DAYS = List(
+      val Days = List(
         "monday",
         "tuesday",
         "wednesday",
@@ -67,7 +67,7 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
       val action = params("Body").split(" ").head.toLowerCase
       val text   = params("Body").split(" ").tail.mkString(" ")
 
-      if (List("unsubscribe", "cancel", "stop", "completed") contains action) {
+      if (List("unsubscribe", "cancel", "stop", "completed").contains(action)) {
 
         // If no reminder ID is passed, delete all reminders for the incoming number
         var deletedNum: Int = 0
@@ -80,17 +80,17 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
 
         sendMessage(from, s"Removed $deletedNum reminders")
 
-      } else if (List("daily", "weekly", "weekdays", "weekends", DAYS).flatMap { case s: String => List(s); case as: List[_] => as } contains action) {
+      } else if ((List("daily", "weekly", "weekdays", "weekends") ::: Days).contains(action)) {
 
         var schedule: List[String] = List()
 
         action match {
           case "daily" =>
-            schedule = DAYS
+            schedule = Days
           case "weekly" =>
             schedule = List(new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime))
           case "weekdays" =>
-            schedule = DAYS.filterNot(day => Array("saturday", "sunday") contains day)
+            schedule = Days.filterNot(day => List("saturday", "sunday").contains(day))
           case "weekends" =>
             schedule = List("saturday", "sunday")
           case _ =>
@@ -109,8 +109,8 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
     new AsyncResult { val is: Unit = {
       // send all scheduled messages
       val dateFormat = new SimpleDateFormat("d-M-y")
-      val today = dateFormat.format(Calendar.getInstance().getTime)
-      val dayOfWeek = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
+      val today      = dateFormat.format(Calendar.getInstance().getTime)
+      val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
 
       var jobIds: Array[Int] = Array()
 
@@ -127,7 +127,7 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
 
       // Update "LAST_SENT" field on the job
       jobIds.foreach(id => Spreadsheet.updateEntryLastSent(id))
-    }
+    }}
   }
 
 }
