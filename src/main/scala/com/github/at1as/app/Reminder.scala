@@ -64,6 +64,7 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
     // Twilio only offers one single web-hook for incoming numbers which must
     // be either GET or POST so all app logic will be behind this endpoint
     new AsyncResult { val is: Future[Unit] = {
+      implicit val timeout: Timeout = Timeout(10.seconds)
       val Days = List(
         "monday",
         "tuesday",
@@ -81,8 +82,6 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
 
       if (List("unsubscribe", "cancel", "stop", "completed").contains(action)) {
 
-        implicit val timeout: Timeout = Timeout(10.seconds)
-
         // If no reminder ID is passed, delete all reminders for the incoming number
         var deletedNum: Int = 0
         deletedNum = if (text.isEmpty) {
@@ -96,7 +95,6 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
         msgText = s"Removed $deletedNum reminders"
 
       } else if ((List("daily", "weekly", "weekdays", "weekends") ::: Days).contains(action)) {
-
         var schedule: List[String] = List()
 
         action match {
@@ -112,8 +110,7 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
             schedule = List(action)
         }
 
-        println(schedule)
-        implicit val timeout: akka.util.Timeout = 10 seconds
+        println(f"received schedule: $schedule")
         val future  = workerRef ? List("addEntry", from, text, schedule)
         val entryId = Await.result(future, taskTimeout.duration).asInstanceOf[Int]
 
@@ -128,14 +125,14 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
     new AsyncResult {
       val is: Future[Unit] = {
         Future {
+          implicit val timeout: akka.util.Timeout = 10 seconds
+
           // send all scheduled messages
           val dateFormat = new SimpleDateFormat("d-M-y")
           val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
-
           var jobIds: Array[Int] = Array()
 
           // Find messages scheduled to send on the current day
-          implicit val timeout: akka.util.Timeout = 10 seconds
           val future   = workerRef ? List("findEntryBySchedule", dayOfWeek)
           val messages = Await.result(future, taskTimeout.duration).asInstanceOf[List[Map[String, String]]]
 

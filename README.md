@@ -39,7 +39,7 @@ Usage:
 
 ```sh
 $ cd Remind_Me
-$ ./sbt
+$ sbt
 > jetty:start
 ```
 And optionally, to use ngrok
@@ -50,8 +50,11 @@ $ ngrok http 8080
 
 In the above example, `http://206934cd.ngrok.io/reminders` becomes the Twilio callback URL
 
+To send out the reminders, POST to the `/scheduler` endpoint. As reminders don't currently accept a time, only a day, it is recommended to have a cron hit this once, on a daily interval.
+
 
 ### TODO
 
 * Replace spreadsheet with Google Sheets API or spin up a Database
+* Accept time/time-ranges for reminders
 * Tests

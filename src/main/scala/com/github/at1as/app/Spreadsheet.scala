@@ -82,13 +82,16 @@ object Spreadsheet {
 
     var rows: Array[List[Any]] = Array()
     val reader = CSVReader.open(csvFile)
-    val active = 0
+    val inactive = 0
 
     reader.foreach(fields => {
       if (fields.head == id.toString && fields(3) == from) {
-        val row = List(fields.head, fields(1), dateStamp(), fields(3), fields(4), fields(5), fields(6), active)
-        rowsDeleted += 1
+        val row = List(fields.head, fields(1), dateStamp(), fields(3), fields(4), fields(5), fields(6), inactive)
         rows +:= row
+        println(f"TAIL IS ${fields.last.toString.trim}")
+        if (fields.last.toString.trim == "1") {
+          rowsDeleted += 1
+        }
       } else {
         rows +:= fields.toList
       }
@@ -107,13 +110,16 @@ object Spreadsheet {
 
     var rows: List[List[Any]] = List()
     val reader = CSVReader.open(csvFile)
-    val active = 0
+    val inactive = 0
 
     reader.foreach(fields => {
       if (fields(3) == phonenumber) {
-        val row = List(fields.head, fields(1), dateStamp(), fields(3), fields(4), fields(5), fields(6), active)
-        rowsDeleted += 1
+        val row = List(fields.head, fields(1), dateStamp(), fields(3), fields(4), fields(5), fields(6), inactive)
         rows +:= row
+
+        if (fields.last.toString.trim == "1") {
+          rowsDeleted += 1
+        }
       } else {
         rows +:= fields.toList
       }
@@ -127,6 +133,7 @@ object Spreadsheet {
   }
 
   private def rowCount(): Int = {
+    // TODO: this doesn't account for data integrity issues. Need to ensure unique auto_id, not blindly increment
     val file = CSVReader.open(csvFile)
     file.synchronized(file.allWithHeaders().size)
   }
