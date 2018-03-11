@@ -22,7 +22,9 @@ libraryDependencies ++= Seq(
   "javax.servlet" % "javax.servlet-api" % "3.1.0" % "provided",
   "com.github.tototoshi" %% "scala-csv" % "1.3.5",
   "com.twilio.sdk" % "twilio" % "7.15.5",
-  "com.typesafe" % "config" % "1.3.2"
+  "com.typesafe" % "config" % "1.3.2",
+  "com.typesafe.akka" %% "akka-actor" % "2.5.9",
+  "com.typesafe.akka" %% "akka-testkit" % "2.5.9" % Test
   //"foorgol" %% "scala" % "1.0.5"
 )
 

@@ -3,17 +3,27 @@ package com.github.at1as.app
 import java.text.SimpleDateFormat
 import java.util.{Calendar, Locale}
 
+import akka.actor.{ActorSystem, Props}
+import akka.pattern.ask
+import akka.util.Timeout
+import com.github.at1as.app.TwilioClient.sendMessage
+import com.github.at1as.app.SpreadsheetAccessDelegator
 import org.json4s.{DefaultFormats, Formats}
 import org.scalatra._
 import org.scalatra.json._
-import com.github.at1as.app.TwilioClient.sendMessage
-import com.github.at1as.app.MessageCallback
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration._
+import scala.concurrent.{Await, Future}
 
 class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSupport {
 
   protected implicit lazy val jsonFormats: Formats = DefaultFormats
+
+  implicit val timeout: Timeout = Timeout(10.seconds)
+  val system = ActorSystem("System")
+  val workerRef   = system.actorOf(Props[SpreadsheetAccessDelegator], name="spreadsheetActor")
+  val taskTimeout = Timeout(10.seconds)
 
   get("/") {
     views.html.hello()
@@ -50,9 +60,10 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
   }
   
   post("/reminder") {
-    // Twilio only offers oine single web-hook for incoming numbers which must
-    // be either GET or POSTso all app logic will be behind this endpoint
-    new AsyncResult { val is: Unit = {
+    implicit val timeout: Timeout = Timeout(10.seconds)
+    // Twilio only offers one single web-hook for incoming numbers which must
+    // be either GET or POST so all app logic will be behind this endpoint
+    new AsyncResult { val is: Future[Unit] = {
       val Days = List(
         "monday",
         "tuesday",
@@ -63,22 +74,26 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
         "sunday"
       )
 
-      val from   = params("From")
-      val action = params("Body").split(" ").head.toLowerCase
-      val text   = params("Body").split(" ").tail.mkString(" ")
+      val from    = params("From")
+      val action  = params("Body").split(" ").head.toLowerCase
+      val text    = params("Body").split(" ").tail.mkString(" ")
+      var msgText = ""
 
       if (List("unsubscribe", "cancel", "stop", "completed").contains(action)) {
 
+        implicit val timeout: Timeout = Timeout(10.seconds)
+
         // If no reminder ID is passed, delete all reminders for the incoming number
         var deletedNum: Int = 0
-
-        if (text.isEmpty) {
-          deletedNum = Spreadsheet.removeAccountEntries(from)
+        deletedNum = if (text.isEmpty) {
+          val future = workerRef ? List("removeAccountEntries", from)
+          Await.result(future, taskTimeout.duration).asInstanceOf[Int]
         } else {
-          deletedNum = Spreadsheet.removeEntry(from, text.toInt)
+          val future = workerRef ? List("removeEntry", from, text.toInt)
+          Await.result(future, taskTimeout.duration).asInstanceOf[Int]
         }
 
-        sendMessage(from, s"Removed $deletedNum reminders")
+        msgText = s"Removed $deletedNum reminders"
 
       } else if ((List("daily", "weekly", "weekdays", "weekends") ::: Days).contains(action)) {
 
@@ -98,36 +113,48 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
         }
 
         println(schedule)
-        val entryId = Spreadsheet.addEntry(from, text, schedule)
+        implicit val timeout: akka.util.Timeout = 10 seconds
+        val future  = workerRef ? List("addEntry", from, text, schedule)
+        val entryId = Await.result(future, taskTimeout.duration).asInstanceOf[Int]
 
-        sendMessage(from, s"You are now subscribed on $action schedule to receive reminders for: $text (id: $entryId)")
+        msgText = s"You are now subscribed on $action schedule to receive reminders for: $text (id: $entryId)"
       }
+      sendMessage(from, msgText)
     }}
   }
 
   post("/scheduler") {
-    new AsyncResult { val is: Unit = {
-      // send all scheduled messages
-      val dateFormat = new SimpleDateFormat("d-M-y")
-      val today      = dateFormat.format(Calendar.getInstance().getTime)
-      val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
+    implicit val timeout: Timeout = Timeout(10.seconds)
+    new AsyncResult {
+      val is: Future[Unit] = {
+        Future {
+          // send all scheduled messages
+          val dateFormat = new SimpleDateFormat("d-M-y")
+          val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
 
-      var jobIds: Array[Int] = Array()
+          var jobIds: Array[Int] = Array()
 
-      // Find messages scheduled to send on the current day
-      val messages = Spreadsheet.findEntryBySchedule(dayOfWeek)
-      println(f"Batching ${messages.size} reminders to send")
+          // Find messages scheduled to send on the current day
+          implicit val timeout: akka.util.Timeout = 10 seconds
+          val future   = workerRef ? List("findEntryBySchedule", dayOfWeek)
+          val messages = Await.result(future, taskTimeout.duration).asInstanceOf[List[Map[String, String]]]
 
-      messages.foreach(fields => {
-        sendMessage(
-          fields("TO_NUMBER"), fields("MSG_BODY")
-        )
-        jobIds :+= fields("ID").toInt
-      })
+          println(f"Batching ${messages.size} reminders to send")
 
-      // Update "LAST_SENT" field on the job
-      jobIds.foreach(id => Spreadsheet.updateEntryLastSent(id))
-    }}
+          messages.foreach(fields => {
+            sendMessage(
+              fields("TO_NUMBER"), fields("MSG_BODY")
+            )
+            jobIds :+= fields("ID").toInt
+          })
+
+          // Update "LAST_SENT" field on the job
+          jobIds.foreach(id =>
+            workerRef ! List("updateEntryLastSent", id)
+          )
+        }
+      }
+    }
   }
 
 }
