@@ -34,20 +34,27 @@ Usage:
 
 ## Build & Run ##
 
+* First, configure your Twilio account credentials under `src/main/resources/twilio_account.conf`
+* Next, configure a Twilio callback URL for the number specified in twilio_account.conf under `phonenumber` by navigating to `https://www.twilio.com/console/phone-numbers/{PhoneNumberSID}` and under Messaging setting `A Message Comes In ` to send a POST to /reminders endpoint at your public server address. Suggest using NGROK to connect the callback URL to your local machine over a public URL
+
 ```sh
 $ cd Remind_Me
-$ ./sbt
+$ sbt
 > jetty:start
-> browse
+```
+And optionally, to use ngrok
+```
+$ ngrok http 8080
+> Forwarding http://206934cd.ngrok.io -> localhost:8080
 ```
 
-If `browse` doesn't launch your browser, manually open [http://localhost:8080/](http://localhost:8080/) in your browser.
+In the above example, `http://206934cd.ngrok.io/reminders` becomes the Twilio callback URL
 
-Configure your Twilio account credentials under `src/main/resources/twilio_account.conf` and set up a Twilio callback URL for the number configured in twilio_account.conf under `phonenumber` by navigating to `https://www.twilio.com/console/phone-numbers/{PhoneNumberSID}` and under Messaging setting `A Message Comes In ` to send a POST to /reminders endpoint at your public server address. Configure with NGROK to run on a local machine.
+To send out the reminders, POST to the `/scheduler` endpoint. As reminders don't currently accept a time, only a day, it is recommended to have a cron hit this once, on a daily interval.
 
 
 ### TODO
 
-* Spreadsheet modification is not threadsafe
 * Replace spreadsheet with Google Sheets API or spin up a Database
+* Accept time/time-ranges for reminders
 * Tests

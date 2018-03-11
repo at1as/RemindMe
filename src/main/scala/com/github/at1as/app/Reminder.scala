@@ -2,16 +2,28 @@ package com.github.at1as.app
 
 import java.text.SimpleDateFormat
 import java.util.{Calendar, Locale}
+
+import akka.actor.{ActorSystem, Props}
+import akka.pattern.ask
+import akka.util.Timeout
+import com.github.at1as.app.TwilioClient.sendMessage
+import com.github.at1as.app.SpreadsheetAccessDelegator
 import org.json4s.{DefaultFormats, Formats}
 import org.scalatra._
 import org.scalatra.json._
-import com.github.at1as.app.TwilioClient.{initializeTwilio, sendMessage}
-import com.github.at1as.app.MessageCallback
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration._
+import scala.concurrent.{Await, Future}
 
 class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSupport {
 
   protected implicit lazy val jsonFormats: Formats = DefaultFormats
 
+  implicit val timeout: Timeout = Timeout(10.seconds)
+  val system = ActorSystem("System")
+  val workerRef   = system.actorOf(Props[SpreadsheetAccessDelegator], name="spreadsheetActor")
+  val taskTimeout = Timeout(10.seconds)
 
   get("/") {
     views.html.hello()
@@ -48,92 +60,98 @@ class Reminder extends ScalatraServlet with MethodOverride with JacksonJsonSuppo
   }
   
   post("/reminder") {
-    // Twilio only offers a single web-hook for incoming numbers
-    // which must be either GET or POST
-    // so all app logic will be behind this endpoint
-
-    val DAYS = Array(
-      "monday",
-      "tuesday",
-      "wednesday",
-      "thursday",
-      "friday",
-      "saturday",
-      "sunday"
-    )
-
-    val from   = params("From")
-    val action = params("Body").split(" ").head.toLowerCase
-    val text   = params("Body").split(" ").tail.mkString(" ")
-
-    if (Array("unsubscribe", "cancel", "stop", "completed") contains action) {
-
-      // If no reminder ID is passed, delete all reminders for the incoming number
-      var deletedNum: Int = 0
-
-      if (text == "") {
-        deletedNum = Spreadsheet.removeAccountEntries(from)
-      } else {
-        deletedNum = Spreadsheet.remoteEntry(text.toInt)
-      }
-
-      initializeTwilio()
-      sendMessage(from, s"Removed $deletedNum reminders")
-
-      //} else if (action contains ("daily", "weekly", "weekdays", "weekends", DAYS : _*)) {
-    } else if (Array("daily", "weekly", "weekdays", "weekends", DAYS).flatMap { case s: String => Array(s); case as: Array[String] => as } contains action) {
-
-      var schedule: Array[String] = Array()
-
-      action match {
-        case "daily" =>
-          schedule = DAYS
-        case "weekly" =>
-          schedule = Array(new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime))
-        case "weekdays" =>
-          schedule = DAYS.filterNot(day => Array("saturday", "sunday") contains day)
-        case "weekends" =>
-          schedule = Array("saturday", "sunday")
-        case _ =>
-          schedule = Array(action)
-      }
-
-      println(schedule)
-
-      val entryId = Spreadsheet.addEntry(
-        from,
-        text,
-        schedule
+    implicit val timeout: Timeout = Timeout(10.seconds)
+    // Twilio only offers one single web-hook for incoming numbers which must
+    // be either GET or POST so all app logic will be behind this endpoint
+    new AsyncResult { val is: Future[Unit] = {
+      implicit val timeout: Timeout = Timeout(10.seconds)
+      val Days = List(
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday"
       )
 
-      initializeTwilio()
-      sendMessage(from, s"You are now subscribed on $action schedule to receive reminders for: $text (id: $entryId)")
-    }
+      val from    = params("From")
+      val action  = params("Body").split(" ").head.toLowerCase
+      val text    = params("Body").split(" ").tail.mkString(" ")
+      var msgText = ""
+
+      if (List("unsubscribe", "cancel", "stop", "completed").contains(action)) {
+
+        // If no reminder ID is passed, delete all reminders for the incoming number
+        var deletedNum: Int = 0
+        deletedNum = if (text.isEmpty) {
+          val future = workerRef ? List("removeAccountEntries", from)
+          Await.result(future, taskTimeout.duration).asInstanceOf[Int]
+        } else {
+          val future = workerRef ? List("removeEntry", from, text.toInt)
+          Await.result(future, taskTimeout.duration).asInstanceOf[Int]
+        }
+
+        msgText = s"Removed $deletedNum reminders"
+
+      } else if ((List("daily", "weekly", "weekdays", "weekends") ::: Days).contains(action)) {
+        var schedule: List[String] = List()
+
+        action match {
+          case "daily" =>
+            schedule = Days
+          case "weekly" =>
+            schedule = List(new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime))
+          case "weekdays" =>
+            schedule = Days.filterNot(day => List("saturday", "sunday").contains(day))
+          case "weekends" =>
+            schedule = List("saturday", "sunday")
+          case _ =>
+            schedule = List(action)
+        }
+
+        println(f"received schedule: $schedule")
+        val future  = workerRef ? List("addEntry", from, text, schedule)
+        val entryId = Await.result(future, taskTimeout.duration).asInstanceOf[Int]
+
+        msgText = s"You are now subscribed on $action schedule to receive reminders for: $text (id: $entryId)"
+      }
+      sendMessage(from, msgText)
+    }}
   }
 
   post("/scheduler") {
-    initializeTwilio()
+    implicit val timeout: Timeout = Timeout(10.seconds)
+    new AsyncResult {
+      val is: Future[Unit] = {
+        Future {
+          implicit val timeout: akka.util.Timeout = 10 seconds
 
-    // send all scheduled messages
-    val dateFormat = new SimpleDateFormat("d-M-y")
-    val today      = dateFormat.format(Calendar.getInstance().getTime)
-    val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
+          // send all scheduled messages
+          val dateFormat = new SimpleDateFormat("d-M-y")
+          val dayOfWeek  = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(Calendar.getInstance.getTime)
+          var jobIds: Array[Int] = Array()
 
-    var jobIds: Array[Int] = Array()
+          // Find messages scheduled to send on the current day
+          val future   = workerRef ? List("findEntryBySchedule", dayOfWeek)
+          val messages = Await.result(future, taskTimeout.duration).asInstanceOf[List[Map[String, String]]]
 
-    // Find messages scheduled to send on the current day
-    val messages = Spreadsheet.findEntryBySchedule(dayOfWeek)
-    println(f"Batching ${messages.size} reminders to send")
+          println(f"Batching ${messages.size} reminders to send")
 
-    messages.foreach(fields => {
-      sendMessage(
-        fields("TO_NUMBER"), fields("MSG_BODY")
-      )
-      jobIds :+= fields("ID").toInt
-    })
+          messages.foreach(fields => {
+            sendMessage(
+              fields("TO_NUMBER"), fields("MSG_BODY")
+            )
+            jobIds :+= fields("ID").toInt
+          })
 
-    // Update "LAST_SENT" field on the job
-    jobIds.foreach(id => Spreadsheet.updateEntryLastSent(id))
+          // Update "LAST_SENT" field on the job
+          jobIds.foreach(id =>
+            workerRef ! List("updateEntryLastSent", id)
+          )
+        }
+      }
+    }
   }
 
 }
